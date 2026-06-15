@@ -483,6 +483,15 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+crash.log
+override.tf
+override.tf.json
+
 # Playwright
 /test-results/
 /playwright-report/
