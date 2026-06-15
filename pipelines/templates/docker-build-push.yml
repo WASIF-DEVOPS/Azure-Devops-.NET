@@ -1,0 +1,22 @@
+parameters:
+  - name: serviceName
+    type: string
+  - name: dockerfilePath
+    type: string
+  - name: acrName
+    type: string
+  - name: imageTag
+    type: string
+
+steps:
+  - task: Docker@2
+    displayName: Build & Push ${{ parameters.serviceName }}
+    inputs:
+      command: buildAndPush
+      containerRegistry: acr-service-connection
+      repository: ${{ parameters.serviceName }}
+      dockerfile: ${{ parameters.dockerfilePath }}
+      buildContext: $(Build.SourcesDirectory)
+      tags: |
+        ${{ parameters.imageTag }}
+        latest

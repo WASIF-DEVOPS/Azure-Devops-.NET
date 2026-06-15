@@ -1,0 +1,18 @@
+resource "azurerm_postgresql_flexible_server" "postgres" {
+  name                   = "eshop-${var.environment}-postgres"
+  resource_group_name    = var.resource_group_name
+  location               = var.location
+  version                = "16"
+  administrator_login    = "psqladmin"
+  administrator_password = var.admin_password
+  sku_name               = "B_Standard_B1ms"
+  storage_mb             = 32768
+  backup_retention_days  = 7
+}
+
+variable "resource_group_name" {}
+variable "location" {}
+variable "environment" {}
+variable "admin_password" { sensitive = true }
+
+output "host" { value = azurerm_postgresql_flexible_server.postgres.fqdn }
