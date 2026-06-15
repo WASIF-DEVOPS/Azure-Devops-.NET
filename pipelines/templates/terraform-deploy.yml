@@ -1,0 +1,34 @@
+parameters:
+  - name: tfAction
+    type: string
+    default: apply
+  - name: environment
+    type: string
+
+steps:
+  - task: TerraformInstaller@1
+    inputs:
+      terraformVersion: latest
+
+  - task: TerraformTaskV4@4
+    displayName: Terraform Init
+    inputs:
+      provider: azurerm
+      command: init
+      workingDirectory: $(Build.SourcesDirectory)/infra/terraform
+      backendServiceArm: azure-service-connection
+      backendAzureRmResourceGroupName: eshop-tfstate-rg
+      backendAzureRmStorageAccountName: eshoptfstate
+      backendAzureRmContainerName: tfstate
+      backendAzureRmKey: eshop.terraform.tfstate
+
+  - task: TerraformTaskV4@4
+    displayName: Terraform ${{ parameters.tfAction }}
+    inputs:
+      provider: azurerm
+      command: ${{ parameters.tfAction }}
+      workingDirectory: $(Build.SourcesDirectory)/infra/terraform
+      environmentServiceNameAzureRM: azure-service-connection
+      commandOptions: >
+        -var="environment=${{ parameters.environment }}"
+        -auto-approve

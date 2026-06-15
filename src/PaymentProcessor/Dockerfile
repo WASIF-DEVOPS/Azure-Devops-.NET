@@ -1,0 +1,21 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY Directory.Packages.props .
+COPY Directory.Build.props .
+COPY nuget.config .
+
+COPY ["src/PaymentProcessor/PaymentProcessor.csproj", "src/PaymentProcessor/"]
+COPY ["src/eShop.ServiceDefaults/eShop.ServiceDefaults.csproj", "src/eShop.ServiceDefaults/"]
+COPY ["src/EventBusRabbitMQ/EventBusRabbitMQ.csproj", "src/EventBusRabbitMQ/"]
+COPY ["src/EventBus/EventBus.csproj", "src/EventBus/"]
+RUN dotnet restore "src/PaymentProcessor/PaymentProcessor.csproj"
+
+COPY src/ src/
+RUN dotnet publish "src/PaymentProcessor/PaymentProcessor.csproj" -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
+EXPOSE 8080
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "PaymentProcessor.dll"]
