@@ -1,7 +1,13 @@
+resource "random_string" "postgres_suffix" {
+  length  = 6
+  special = false
+  upper   = false
+}
+
 resource "azurerm_postgresql_flexible_server" "postgres" {
-  name                   = "eshop-${var.environment}-postgres"
+  name                   = "eshop-${var.environment}-pg-${random_string.postgres_suffix.result}"
   resource_group_name    = var.resource_group_name
-  location               = var.location
+  location               = var.postgres_location
   version                = "16"
   administrator_login    = "psqladmin"
   administrator_password = var.admin_password
@@ -12,6 +18,7 @@ resource "azurerm_postgresql_flexible_server" "postgres" {
 
 variable "resource_group_name" {}
 variable "location" {}
+variable "postgres_location" {}
 variable "environment" {}
 variable "admin_password" { sensitive = true }
 

@@ -6,13 +6,16 @@ resource "azurerm_kubernetes_cluster" "aks" {
 
   default_node_pool {
     name       = "system"
-    node_count = 2
-    vm_size    = "Standard_D2s_v3"
+    node_count = 1
+    vm_size    = "Standard_D2s_v7"
   }
 
   identity {
     type = "SystemAssigned"
   }
+
+  oidc_issuer_enabled       = true
+  workload_identity_enabled = true
 }
 
 resource "azurerm_role_assignment" "aks_acr_pull" {

@@ -65,6 +65,7 @@ module "postgres" {
   source              = "./modules/postgres"
   resource_group_name = azurerm_resource_group.eshop.name
   location            = var.location
+  postgres_location   = var.postgres_location
   environment         = var.environment
   admin_password      = random_password.db.result
 }
