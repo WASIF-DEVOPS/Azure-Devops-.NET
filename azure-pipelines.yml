@@ -37,6 +37,7 @@ stages:
       parameters:
         tfAction: apply
         environment: dev
+        postgresLocation: westus2
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGE 2 — Build & Test
