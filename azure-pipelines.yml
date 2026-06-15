@@ -166,6 +166,9 @@ stages:
                   --name eshop-dev-aks \
                   --overwrite-existing
 
+          - script: kubectl apply -f k8s/deployments.yml
+            displayName: Apply K8s manifests
+
           - task: AzureCLI@2
             displayName: Create K8s secrets from Key Vault
             env:
