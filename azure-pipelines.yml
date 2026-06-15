@@ -44,7 +44,7 @@ stages:
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: Build
   displayName: 2 - Build & Test
-  dependsOn: []
+  dependsOn: Infra
   jobs:
   - job: BuildAndTest
     pool:
@@ -58,14 +58,14 @@ stages:
         version: $(dotnetVersion)
         includePreviewVersions: true
 
-    - script: dotnet restore eShop.slnx
+    - script: dotnet restore eShop.Web.slnf
       displayName: Restore
 
-    - script: dotnet build eShop.slnx --no-restore -c Release
+    - script: dotnet build eShop.Web.slnf --no-restore -c Release
       displayName: Build
 
     - script: |
-        dotnet test tests/ -c Release \
+        dotnet test eShop.Web.slnf -c Release \
           --logger trx \
           --results-directory $(Agent.TempDirectory)/TestResults \
           --collect:"XPlat Code Coverage" || true
