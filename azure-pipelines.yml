@@ -19,7 +19,7 @@ variables:
   keyVaultName: eshop-dev-kv
   terraformVersion: '1.7.5'
   tfEnvironment: dev
-  tfPostgresLocation: westus2
+  tfPostgresLocation: eastus
   # ⚠️  Set to 'true' when manually queuing to run the Destroy stage
   RUN_DESTROY: 'false'
 
