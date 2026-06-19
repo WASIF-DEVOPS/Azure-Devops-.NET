@@ -1,0 +1,268 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webapp
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      containers:
+      - name: webapp
+        image: eshopdevacr.azurecr.io/webapp:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp
+spec:
+  type: LoadBalancer
+  selector:
+    app: webapp
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: catalog-api
+  template:
+    metadata:
+      labels:
+        app: catalog-api
+    spec:
+      containers:
+      - name: catalog-api
+        image: eshopdevacr.azurecr.io/catalog-api:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-api
+spec:
+  type: ClusterIP
+  selector:
+    app: catalog-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: basket-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: basket-api
+  template:
+    metadata:
+      labels:
+        app: basket-api
+    spec:
+      containers:
+      - name: basket-api
+        image: eshopdevacr.azurecr.io/basket-api:latest
+        ports:
+        - containerPort: 8080
+        - containerPort: 8081
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: basket-api
+spec:
+  type: ClusterIP
+  selector:
+    app: basket-api
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: grpc
+    port: 8081
+    targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ordering-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ordering-api
+  template:
+    metadata:
+      labels:
+        app: ordering-api
+    spec:
+      containers:
+      - name: ordering-api
+        image: eshopdevacr.azurecr.io/ordering-api:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ordering-api
+spec:
+  type: ClusterIP
+  selector:
+    app: ordering-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: identity-api
+  template:
+    metadata:
+      labels:
+        app: identity-api
+    spec:
+      containers:
+      - name: identity-api
+        image: eshopdevacr.azurecr.io/identity-api:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-api
+spec:
+  type: ClusterIP
+  selector:
+    app: identity-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhooks-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhooks-api
+  template:
+    metadata:
+      labels:
+        app: webhooks-api
+    spec:
+      containers:
+      - name: webhooks-api
+        image: eshopdevacr.azurecr.io/webhooks-api:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_URLS
+          value: http://+:8080
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhooks-api
+spec:
+  type: ClusterIP
+  selector:
+    app: webhooks-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-processor
+  template:
+    metadata:
+      labels:
+        app: order-processor
+    spec:
+      containers:
+      - name: order-processor
+        image: eshopdevacr.azurecr.io/order-processor:latest
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-processor
+  template:
+    metadata:
+      labels:
+        app: payment-processor
+    spec:
+      containers:
+      - name: payment-processor
+        image: eshopdevacr.azurecr.io/payment-processor:latest
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: Production

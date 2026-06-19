@@ -17,14 +17,103 @@ variables:
   imageTag: $(Build.BuildId)
   dotnetVersion: '10.0.x'
   keyVaultName: eshop-dev-kv
+  terraformVersion: '1.7.5'
+  tfEnvironment: dev
+  tfPostgresLocation: westus2
+  # ⚠️  Set to 'true' when manually queuing to run the Destroy stage
+  RUN_DESTROY: 'false'
 
 stages:
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 1 — Build & Test
+# STAGE 1 — Terraform Init + Plan + Apply
+# Runs first — provisions all Azure infrastructure before the app is built.
+# (ACR, AKS, PostgreSQL, Redis, Service Bus, Key Vault)
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: TerraformProvision
+  displayName: 1 - Terraform Init + Plan + Apply
+  dependsOn: []
+  condition: not(eq(variables['RUN_DESTROY'], 'true'))
+  jobs:
+  - job: TerraformApply
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - checkout: self
+
+    # ── Step 1: Init ──────────────────────────────────────────────────────────
+    - task: AzureCLI@2
+      displayName: Terraform Init
+      inputs:
+        azureSubscription: azure-service-connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        addSpnToEnvironment: true
+        inlineScript: |
+          wget -q https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
+          unzip -q terraform_$(terraformVersion)_linux_amd64.zip
+          sudo mv terraform /usr/local/bin/
+
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_CLIENT_SECRET=$servicePrincipalKey
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+          cd $(Build.SourcesDirectory)/infra/terraform
+          terraform init \
+            -backend-config="resource_group_name=eshop-tfstate-rg" \
+            -backend-config="storage_account_name=eshoptfstate" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=eshop.terraform.tfstate"
+
+    # ── Step 2: Plan ─────────────────────────────────────────────────────────
+    - task: AzureCLI@2
+      displayName: Terraform Plan
+      inputs:
+        azureSubscription: azure-service-connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_CLIENT_SECRET=$servicePrincipalKey
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+          cd $(Build.SourcesDirectory)/infra/terraform
+          terraform plan \
+            -var="environment=$(tfEnvironment)" \
+            -var="postgres_location=$(tfPostgresLocation)" \
+            -out=tfplan \
+            -detailed-exitcode || EXIT=$?
+          # exit 0 = no changes, exit 2 = changes pending (both OK)
+          if [ "${EXIT:-0}" -eq 1 ]; then exit 1; fi
+
+    # ── Step 3: Apply ────────────────────────────────────────────────────────
+    - task: AzureCLI@2
+      displayName: Terraform Apply
+      inputs:
+        azureSubscription: azure-service-connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        addSpnToEnvironment: true
+        inlineScript: |
+          export ARM_CLIENT_ID=$servicePrincipalId
+          export ARM_CLIENT_SECRET=$servicePrincipalKey
+          export ARM_TENANT_ID=$tenantId
+          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+          cd $(Build.SourcesDirectory)/infra/terraform
+          terraform apply -auto-approve tfplan
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — Build & Test
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: Build
-  displayName: 1 - Build & Test
+  displayName: 2 - Build & Test
+  dependsOn: TerraformProvision
+  condition: succeeded('TerraformProvision')
   jobs:
   - job: BuildAndTest
     pool:
@@ -63,10 +152,10 @@ stages:
         summaryFileLocation: '$(Agent.TempDirectory)/TestResults/**/coverage.cobertura.xml'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 2 — Docker Build & Push to ACR
+# STAGE 3 — Docker Build & Push to ACR
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: DockerPush
-  displayName: 2 - Build & Push Docker Images
+  displayName: 3 - Build & Push Docker Images
   dependsOn: Build
   jobs:
   - job: PushImages
@@ -131,10 +220,10 @@ stages:
         imageTag: $(imageTag)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 3 — Deploy to AKS
+# STAGE 4 — Deploy to AKS
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: Deploy
-  displayName: 3 - Deploy to AKS
+  displayName: 4 - Deploy to AKS
   dependsOn: DockerPush
   jobs:
   - deployment: DeployToAKS
@@ -146,14 +235,6 @@ stages:
         deploy:
           steps:
           - checkout: self
-
-          - task: AzureKeyVault@2
-            displayName: Fetch secrets from Key Vault
-            inputs:
-              azureSubscription: azure-service-connection
-              KeyVaultName: $(keyVaultName)
-              SecretsFilter: 'db-password,redis-password,rabbitmq-password'
-              RunAsPreJob: false
 
           - task: AzureCLI@2
             displayName: Get AKS credentials
@@ -172,19 +253,25 @@ stages:
 
           - task: AzureCLI@2
             displayName: Create K8s secrets from Key Vault
-            env:
-              DB_PASSWORD: $(db-password)
-              REDIS_PASSWORD: $(redis-password)
-              RABBITMQ_PASSWORD: $(rabbitmq-password)
             inputs:
               azureSubscription: azure-service-connection
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
+                PG_HOST=$(az postgres flexible-server list -g eshop-dev-rg --query "[0].fullyQualifiedDomainName" -o tsv)
+                PG_PASS=$(az keyvault secret show --vault-name eshop-dev-kv --name db-password --query value -o tsv)
+                REDIS_NAME=$(az redis list -g eshop-dev-rg --query "[0].name" -o tsv)
+                REDIS_HOST=$(az redis list -g eshop-dev-rg --query "[0].hostName" -o tsv)
+                REDIS_KEY=$(az redis list-keys --name $REDIS_NAME -g eshop-dev-rg --query primaryKey -o tsv)
+
+                PG_CONNSTR_BASE="SSL Mode=Require"
+
                 kubectl create secret generic eshop-secrets \
-                  --from-literal=db-password="$DB_PASSWORD" \
-                  --from-literal=redis-password="$REDIS_PASSWORD" \
-                  --from-literal=rabbitmq-password="$RABBITMQ_PASSWORD" \
+                  --from-literal=catalog-db-connstr="Host=$PG_HOST;Database=CatalogDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=ordering-db-connstr="Host=$PG_HOST;Database=OrderingDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=identity-db-connstr="Host=$PG_HOST;Database=IdentityDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=webhooks-db-connstr="Host=$PG_HOST;Database=WebhooksDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=redis-connstr="$REDIS_HOST:6380,password=$REDIS_KEY,ssl=True" \
                   --dry-run=client -o yaml | kubectl apply -f -
 
           - script: |
@@ -196,3 +283,100 @@ stages:
 
           - script: kubectl rollout status deployment --timeout=5m
             displayName: Wait for rollout
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 5 — Terraform Destroy  ⚠️  MANUAL ONLY
+#
+# This stage NEVER runs automatically.
+# To trigger it:
+#   1. Go to Azure Pipelines → Run pipeline
+#   2. Set variable  RUN_DESTROY = true
+#   3. Queue the run — all other stages will be skipped
+#   4. Approve the 'destroy-approval' environment gate when prompted
+#
+# This will permanently delete ALL Azure resources for the environment.
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: TerraformDestroy
+  displayName: "⚠️ MANUAL — Terraform Destroy"
+  dependsOn: []                                      # independent — no prerequisite stages
+  condition: eq(variables['RUN_DESTROY'], 'true')    # only runs when explicitly requested
+  jobs:
+  - deployment: DestroyInfrastructure
+    pool:
+      vmImage: ubuntu-latest
+    environment: destroy-approval                    # configure manual approval gate in Azure DevOps
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          # ── Init (required before destroy) ───────────────────────────────
+          - task: AzureCLI@2
+            displayName: Terraform Init
+            inputs:
+              azureSubscription: azure-service-connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                wget -q https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
+                unzip -q terraform_$(terraformVersion)_linux_amd64.zip
+                sudo mv terraform /usr/local/bin/
+
+                export ARM_CLIENT_ID=$servicePrincipalId
+                export ARM_CLIENT_SECRET=$servicePrincipalKey
+                export ARM_TENANT_ID=$tenantId
+                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+                cd $(Build.SourcesDirectory)/infra/terraform
+                terraform init \
+                  -backend-config="resource_group_name=eshop-tfstate-rg" \
+                  -backend-config="storage_account_name=eshoptfstate" \
+                  -backend-config="container_name=tfstate" \
+                  -backend-config="key=eshop.terraform.tfstate"
+
+          # ── Plan Destroy (shows what will be deleted before acting) ───────
+          - task: AzureCLI@2
+            displayName: Terraform Plan Destroy (preview)
+            inputs:
+              azureSubscription: azure-service-connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                export ARM_CLIENT_ID=$servicePrincipalId
+                export ARM_CLIENT_SECRET=$servicePrincipalKey
+                export ARM_TENANT_ID=$tenantId
+                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+                cd $(Build.SourcesDirectory)/infra/terraform
+                echo "======================================"
+                echo "  RESOURCES THAT WILL BE DESTROYED"
+                echo "======================================"
+                terraform plan -destroy \
+                  -var="environment=$(tfEnvironment)" \
+                  -var="postgres_location=$(tfPostgresLocation)"
+
+          # ── Destroy ──────────────────────────────────────────────────────
+          - task: AzureCLI@2
+            displayName: "⚠️ Terraform Destroy — IRREVERSIBLE"
+            inputs:
+              azureSubscription: azure-service-connection
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                export ARM_CLIENT_ID=$servicePrincipalId
+                export ARM_CLIENT_SECRET=$servicePrincipalKey
+                export ARM_TENANT_ID=$tenantId
+                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+                cd $(Build.SourcesDirectory)/infra/terraform
+                terraform destroy \
+                  -var="environment=$(tfEnvironment)" \
+                  -var="postgres_location=$(tfPostgresLocation)" \
+                  -auto-approve
+
+                echo "All infrastructure destroyed successfully."
