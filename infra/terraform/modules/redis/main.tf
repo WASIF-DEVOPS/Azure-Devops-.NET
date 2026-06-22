@@ -13,8 +13,4 @@ resource "azurerm_redis_cache" "redis" {
   sku_name            = "Basic"
 }
 
-variable "resource_group_name" {}
-variable "location" {}
-variable "environment" {}
 
-output "host" { value = azurerm_redis_cache.redis.hostname }

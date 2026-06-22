@@ -25,10 +25,4 @@ resource "azurerm_role_assignment" "aks_acr_pull" {
   skip_service_principal_aad_check = true
 }
 
-variable "resource_group_name" {}
-variable "location" {}
-variable "environment" {}
-variable "acr_id" {}
 
-output "kube_config"      { value = azurerm_kubernetes_cluster.aks.kube_config_raw }
-output "aks_principal_id" { value = azurerm_kubernetes_cluster.aks.kubelet_identity[0].object_id }

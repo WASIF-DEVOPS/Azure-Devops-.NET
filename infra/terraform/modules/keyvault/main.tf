@@ -47,13 +47,4 @@ resource "azurerm_key_vault_secret" "rabbitmq_password" {
   depends_on   = [azurerm_key_vault_access_policy.pipeline]
 }
 
-variable "resource_group_name" {}
-variable "location" {}
-variable "environment" {}
-variable "aks_principal_id" {}
-variable "db_password"       { sensitive = true }
-variable "redis_password"    { sensitive = true }
-variable "rabbitmq_password" { sensitive = true }
 
-output "key_vault_name" { value = azurerm_key_vault.kv.name }
-output "key_vault_id"   { value = azurerm_key_vault.kv.id }
