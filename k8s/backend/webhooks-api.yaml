@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhooks-api
+  namespace: eshop
+  labels:
+    app: webhooks-api
+    tier: backend
+    app.kubernetes.io/part-of: eshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhooks-api
+  template:
+    metadata:
+      labels:
+        app: webhooks-api
+        tier: backend
+    spec:
+      containers:
+        - name: webhooks-api
+          image: eshopdevacr.azurecr.io/webhooks-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_URLS
+              value: http://+:8080
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ConnectionStrings__WebhooksDB
+              valueFrom:
+                secretKeyRef:
+                  name: eshop-secrets
+                  key: webhooks-db
+            # ── OpenTelemetry ──────────────────────────────────────
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.eshop.svc.cluster.local:4317
+            - name: OTEL_SERVICE_NAME
+              value: webhooks-api
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: deployment.environment=dev,service.namespace=eshop
+          livenessProbe:
+            httpGet:
+              path: /alive
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhooks-api
+  namespace: eshop
+  labels:
+    app: webhooks-api
+    tier: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: webhooks-api
+  ports:
+    - port: 8080
+      targetPort: 8080

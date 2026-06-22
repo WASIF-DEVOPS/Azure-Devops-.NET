@@ -1,0 +1,130 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Istio VirtualServices — Retries, Timeouts & Traffic Management
+# Ready for future canary deployments via traffic splitting
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Catalog API ───────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: catalog-api
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  hosts:
+    - catalog-api
+  http:
+    - route:
+        - destination:
+            host: catalog-api
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,retriable-4xx
+---
+# ── Basket API ────────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: basket-api
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  hosts:
+    - basket-api
+  http:
+    - route:
+        - destination:
+            host: basket-api
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,retriable-4xx
+---
+# ── Ordering API ──────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ordering-api
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  hosts:
+    - ordering-api
+  http:
+    - route:
+        - destination:
+            host: ordering-api
+      timeout: 15s
+      retries:
+        attempts: 3
+        perTryTimeout: 5s
+        retryOn: 5xx,reset,connect-failure,retriable-4xx
+---
+# ── Identity API ──────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: identity-api
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  hosts:
+    - identity-api
+  http:
+    - route:
+        - destination:
+            host: identity-api
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,retriable-4xx
+---
+# ── Webhooks API ──────────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: webhooks-api
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  hosts:
+    - webhooks-api
+  http:
+    - route:
+        - destination:
+            host: webhooks-api
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,retriable-4xx
+---
+# ── WebApp (Frontend) ────────────────────────────────────────────────────────
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: webapp
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  hosts:
+    - webapp
+  http:
+    - route:
+        - destination:
+            host: webapp
+      timeout: 30s
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: 5xx,reset,connect-failure

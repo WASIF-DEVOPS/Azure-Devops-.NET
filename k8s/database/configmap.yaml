@@ -1,0 +1,21 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# eShop Database Configuration (non-sensitive settings)
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eshop-db-config
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+    tier: database
+data:
+  # PostgreSQL settings
+  POSTGRES_HOST: "<POSTGRES_FQDN>"
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: "psqladmin"
+
+  # Redis settings
+  REDIS_HOST: "<REDIS_HOSTNAME>"
+  REDIS_PORT: "6380"
+  REDIS_SSL: "true"
