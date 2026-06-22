@@ -1,0 +1,14 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Istio PeerAuthentication — Enforce mTLS
+# All pod-to-pod traffic in the eshop namespace is encrypted automatically
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: eshop-mtls
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+spec:
+  mtls:
+    mode: STRICT

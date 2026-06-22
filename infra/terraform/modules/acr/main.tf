@@ -5,10 +5,3 @@ resource "azurerm_container_registry" "acr" {
   sku                 = "Standard"
   admin_enabled       = false
 }
-
-variable "resource_group_name" {}
-variable "location" {}
-variable "environment" {}
-
-output "acr_id"           { value = azurerm_container_registry.acr.id }
-output "acr_login_server" { value = azurerm_container_registry.acr.login_server }

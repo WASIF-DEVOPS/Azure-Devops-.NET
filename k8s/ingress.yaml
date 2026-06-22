@@ -1,0 +1,59 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eshop-ingress
+  namespace: eshop
+  labels:
+    app.kubernetes.io/part-of: eshop
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          # ── Frontend ────────────────────────────────────────────
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: webapp
+                port:
+                  number: 80
+          # ── Backend APIs ────────────────────────────────────────
+          - path: /api/catalog
+            pathType: Prefix
+            backend:
+              service:
+                name: catalog-api
+                port:
+                  number: 8080
+          - path: /api/basket
+            pathType: Prefix
+            backend:
+              service:
+                name: basket-api
+                port:
+                  number: 8080
+          - path: /api/ordering
+            pathType: Prefix
+            backend:
+              service:
+                name: ordering-api
+                port:
+                  number: 8080
+          - path: /api/identity
+            pathType: Prefix
+            backend:
+              service:
+                name: identity-api
+                port:
+                  number: 8080
+          - path: /api/webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: webhooks-api
+                port:
+                  number: 8080

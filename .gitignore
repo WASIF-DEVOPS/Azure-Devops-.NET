@@ -500,3 +500,4 @@ override.tf.json
 /playwright/.auth/
 /user.json
 .azure
+acr-endpoint.json

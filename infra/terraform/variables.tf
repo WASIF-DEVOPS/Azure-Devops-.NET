@@ -7,5 +7,5 @@ variable "location" {
 }
 
 variable "postgres_location" {
-  default = "eastus2"
+  default = "centralus"
 }

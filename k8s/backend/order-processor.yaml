@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-processor
+  namespace: eshop
+  labels:
+    app: order-processor
+    tier: backend
+    role: worker
+    app.kubernetes.io/part-of: eshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-processor
+  template:
+    metadata:
+      labels:
+        app: order-processor
+        tier: backend
+        role: worker
+    spec:
+      containers:
+        - name: order-processor
+          image: eshopdevacr.azurecr.io/order-processor:latest
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ConnectionStrings__OrderingDB
+              valueFrom:
+                secretKeyRef:
+                  name: eshop-secrets
+                  key: ordering-db
+            # ── OpenTelemetry ──────────────────────────────────────
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.eshop.svc.cluster.local:4317
+            - name: OTEL_SERVICE_NAME
+              value: order-processor
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: deployment.environment=dev,service.namespace=eshop
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

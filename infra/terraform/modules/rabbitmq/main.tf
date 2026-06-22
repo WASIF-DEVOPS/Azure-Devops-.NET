@@ -5,8 +5,4 @@ resource "azurerm_servicebus_namespace" "rabbitmq" {
   sku                 = "Standard"
 }
 
-variable "resource_group_name" {}
-variable "location" {}
-variable "environment" {}
 
-output "host" { value = azurerm_servicebus_namespace.rabbitmq.name }

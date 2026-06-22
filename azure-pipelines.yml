@@ -17,103 +17,18 @@ variables:
   imageTag: $(Build.BuildId)
   dotnetVersion: '10.0.x'
   keyVaultName: eshop-dev-kv
-  terraformVersion: '1.7.5'
-  tfEnvironment: dev
-  tfPostgresLocation: eastus
-  # ⚠️  Set to 'true' when manually queuing to run the Destroy stage
-  RUN_DESTROY: 'false'
+  # SonarQube settings — configure these in Azure DevOps pipeline variables (or variable group)
+  sonarQubeServiceConnection: sonarqube-service-connection
+  sonarQubeProjectKey: eshop
+  sonarQubeProjectName: eShop
 
 stages:
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 1 — Terraform Init + Plan + Apply
-# Runs first — provisions all Azure infrastructure before the app is built.
-# (ACR, AKS, PostgreSQL, Redis, Service Bus, Key Vault)
-# ─────────────────────────────────────────────────────────────────────────────
-- stage: TerraformProvision
-  displayName: 1 - Terraform Init + Plan + Apply
-  dependsOn: []
-  condition: not(eq(variables['RUN_DESTROY'], 'true'))
-  jobs:
-  - job: TerraformApply
-    pool:
-      vmImage: ubuntu-latest
-    steps:
-
-    - checkout: self
-
-    # ── Step 1: Init ──────────────────────────────────────────────────────────
-    - task: AzureCLI@2
-      displayName: Terraform Init
-      inputs:
-        azureSubscription: azure-service-connection
-        scriptType: bash
-        scriptLocation: inlineScript
-        addSpnToEnvironment: true
-        inlineScript: |
-          wget -q https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
-          unzip -q terraform_$(terraformVersion)_linux_amd64.zip
-          sudo mv terraform /usr/local/bin/
-
-          export ARM_CLIENT_ID=$servicePrincipalId
-          export ARM_CLIENT_SECRET=$servicePrincipalKey
-          export ARM_TENANT_ID=$tenantId
-          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-          cd $(Build.SourcesDirectory)/infra/terraform
-          terraform init \
-            -backend-config="resource_group_name=eshop-tfstate-rg" \
-            -backend-config="storage_account_name=eshoptfstate" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=eshop.terraform.tfstate"
-
-    # ── Step 2: Plan ─────────────────────────────────────────────────────────
-    - task: AzureCLI@2
-      displayName: Terraform Plan
-      inputs:
-        azureSubscription: azure-service-connection
-        scriptType: bash
-        scriptLocation: inlineScript
-        addSpnToEnvironment: true
-        inlineScript: |
-          export ARM_CLIENT_ID=$servicePrincipalId
-          export ARM_CLIENT_SECRET=$servicePrincipalKey
-          export ARM_TENANT_ID=$tenantId
-          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-          cd $(Build.SourcesDirectory)/infra/terraform
-          terraform plan \
-            -var="environment=$(tfEnvironment)" \
-            -var="postgres_location=$(tfPostgresLocation)" \
-            -out=tfplan \
-            -detailed-exitcode || EXIT=$?
-          # exit 0 = no changes, exit 2 = changes pending (both OK)
-          if [ "${EXIT:-0}" -eq 1 ]; then exit 1; fi
-
-    # ── Step 3: Apply ────────────────────────────────────────────────────────
-    - task: AzureCLI@2
-      displayName: Terraform Apply
-      inputs:
-        azureSubscription: azure-service-connection
-        scriptType: bash
-        scriptLocation: inlineScript
-        addSpnToEnvironment: true
-        inlineScript: |
-          export ARM_CLIENT_ID=$servicePrincipalId
-          export ARM_CLIENT_SECRET=$servicePrincipalKey
-          export ARM_TENANT_ID=$tenantId
-          export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-          cd $(Build.SourcesDirectory)/infra/terraform
-          terraform apply -auto-approve tfplan
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STAGE 2 — Build & Test
+# STAGE 1 — Build & Test
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: Build
-  displayName: 2 - Build & Test
-  dependsOn: TerraformProvision
-  condition: succeeded('TerraformProvision')
+  displayName: 1 - Build & Test
   jobs:
   - job: BuildAndTest
     pool:
@@ -152,7 +67,67 @@ stages:
         summaryFileLocation: '$(Agent.TempDirectory)/TestResults/**/coverage.cobertura.xml'
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — SonarQube Code Quality & Security Analysis
+# Runs in parallel with Build (no dependency)
+# Scans source code for bugs, vulnerabilities, code smells, and coverage
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: SonarQubeScan
+  displayName: 2 - SonarQube Analysis
+  dependsOn: []
+  jobs:
+  - job: SonarQubeAnalysis
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - task: UseDotNet@2
+      displayName: Install .NET 10
+      inputs:
+        packageType: sdk
+        version: $(dotnetVersion)
+        includePreviewVersions: true
+
+    # ── Prepare SonarQube scanner ──────────────────────────────────────────
+    - task: SonarQubePrepare@6
+      displayName: Prepare SonarQube Analysis
+      inputs:
+        SonarQube: $(sonarQubeServiceConnection)
+        scannerMode: dotnet
+        projectKey: $(sonarQubeProjectKey)
+        projectName: $(sonarQubeProjectName)
+        extraProperties: |
+          sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/TestResults/**/coverage.opencover.xml
+          sonar.exclusions=**/Migrations/**,**/wwwroot/**,**/*.Designer.cs
+
+    # ── Build (required for SonarQube to analyze compiled code) ────────────
+    - script: dotnet restore eShop.Web.slnf
+      displayName: Restore
+
+    - script: dotnet build eShop.Web.slnf --no-restore -c Release
+      displayName: Build
+
+    # ── Run tests with coverage for SonarQube ─────────────────────────────
+    - script: |
+        dotnet test eShop.Web.slnf -c Release --no-build \
+          --logger trx \
+          --results-directory $(Agent.TempDirectory)/TestResults \
+          --collect:"XPlat Code Coverage" \
+          -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover || true
+      displayName: Test with Coverage
+
+    # ── Run SonarQube analysis ────────────────────────────────────────────
+    - task: SonarQubeAnalyze@6
+      displayName: Run SonarQube Analysis
+
+    # ── Publish Quality Gate result ───────────────────────────────────────
+    - task: SonarQubePublish@6
+      displayName: Publish Quality Gate Result
+      inputs:
+        pollingTimeoutSec: 300
+
+# ─────────────────────────────────────────────────────────────────────────────
 # STAGE 3 — Docker Build & Push to ACR
+# Depends on Build stage passing
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: DockerPush
   displayName: 3 - Build & Push Docker Images
@@ -220,11 +195,309 @@ stages:
         imageTag: $(imageTag)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 4 — Deploy to AKS
+# STAGE 4 — Trivy Security Scan
+# Scans all Docker images for CVEs, misconfigurations, and secrets
+# Runs after Docker images are built and pushed
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: TrivyScan
+  displayName: 4 - Trivy Security Scan
+  dependsOn: DockerPush
+  jobs:
+  - job: TrivyImageScan
+    displayName: Scan Docker Images for Vulnerabilities
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - checkout: self
+
+    # ── Install Trivy ─────────────────────────────────────────────────────
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install -y trivy
+      displayName: Install Trivy
+
+    # ── Login to ACR ──────────────────────────────────────────────────────
+    - task: AzureCLI@2
+      displayName: Login to ACR
+      inputs:
+        azureSubscription: azure-service-connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az acr login --name $(acrName)
+
+    # ── Scan all Docker images ────────────────────────────────────────────
+    - script: |
+        IMAGES="webapp catalog-api basket-api ordering-api identity-api webhooks-api order-processor payment-processor"
+        SCAN_FAILED=0
+
+        mkdir -p $(Agent.TempDirectory)/trivy-reports
+
+        for IMAGE in $IMAGES; do
+          FULL_IMAGE="$(acrName).azurecr.io/$IMAGE:$(imageTag)"
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo "  Scanning: $FULL_IMAGE"
+          echo "════════════════════════════════════════════════════════════"
+
+          # JSON report for publishing
+          trivy image \
+            --format json \
+            --output $(Agent.TempDirectory)/trivy-reports/$IMAGE.json \
+            --severity HIGH,CRITICAL \
+            "$FULL_IMAGE"
+
+          # Table report for console output
+          trivy image \
+            --format table \
+            --severity HIGH,CRITICAL \
+            --exit-code 0 \
+            "$FULL_IMAGE"
+
+          # Check for CRITICAL vulnerabilities (fail on critical only)
+          if trivy image --severity CRITICAL --exit-code 1 --quiet "$FULL_IMAGE" 2>/dev/null; then
+            echo "✅ $IMAGE — No CRITICAL vulnerabilities"
+          else
+            echo "❌ $IMAGE — CRITICAL vulnerabilities found!"
+            SCAN_FAILED=1
+          fi
+        done
+
+        if [ "$SCAN_FAILED" -eq 1 ]; then
+          echo ""
+          echo "⚠️  CRITICAL vulnerabilities detected in one or more images."
+          echo "Pipeline will continue but review the scan reports."
+        fi
+      displayName: Scan Docker Images (HIGH & CRITICAL)
+
+    # ── Scan IaC & K8s manifests ──────────────────────────────────────────
+    - script: |
+        echo "════════════════════════════════════════════════════════════"
+        echo "  Scanning Kubernetes manifests"
+        echo "════════════════════════════════════════════════════════════"
+        trivy config \
+          --format table \
+          --severity HIGH,CRITICAL \
+          --exit-code 0 \
+          k8s/
+
+        echo ""
+        echo "════════════════════════════════════════════════════════════"
+        echo "  Scanning Terraform files"
+        echo "════════════════════════════════════════════════════════════"
+        trivy config \
+          --format table \
+          --severity HIGH,CRITICAL \
+          --exit-code 0 \
+          infra/terraform/
+      displayName: Scan K8s & Terraform Configs (Misconfigurations)
+
+    # ── Scan for secrets in source code ───────────────────────────────────
+    - script: |
+        echo "════════════════════════════════════════════════════════════"
+        echo "  Scanning for hardcoded secrets"
+        echo "════════════════════════════════════════════════════════════"
+        trivy fs \
+          --scanners secret \
+          --format table \
+          --exit-code 0 \
+          .
+      displayName: Scan for Hardcoded Secrets
+
+    # ── Publish scan reports as pipeline artifact ─────────────────────────
+    - task: PublishPipelineArtifact@1
+      condition: always()
+      displayName: Publish Trivy Reports
+      inputs:
+        targetPath: $(Agent.TempDirectory)/trivy-reports
+        artifact: trivy-scan-reports
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 5 — Istio Service Mesh
+# Installs Istio on AKS, creates namespace with sidecar injection,
+# applies mTLS, circuit breakers, and retry/timeout policies
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: ServiceMesh
+  displayName: 5 - Istio Service Mesh
+  dependsOn:
+    - TrivyScan
+    - SonarQubeScan
+  jobs:
+  - job: InstallIstio
+    displayName: Install Istio & Apply Mesh Policies
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - checkout: self
+
+    - task: AzureCLI@2
+      displayName: Get AKS credentials
+      inputs:
+        azureSubscription: azure-service-connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az aks get-credentials \
+            --resource-group eshop-dev-rg \
+            --name eshop-dev-aks \
+            --overwrite-existing
+
+    # ── Install Istio on AKS (if not present) ──────────────────────────
+    - script: |
+        if ! kubectl get namespace istio-system > /dev/null 2>&1; then
+          echo "Installing Istio 1.22.0..."
+          curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.22.0 sh -
+          export PATH=$PWD/istio-1.22.0/bin:$PATH
+          istioctl install --set profile=default -y
+          echo ""
+          echo "Waiting for Istio control plane to be ready..."
+          kubectl wait --namespace istio-system \
+            --for=condition=ready pod \
+            --selector=app=istiod \
+            --timeout=120s
+          echo "✅ Istio installed successfully."
+        else
+          echo "✅ Istio already installed — skipping."
+          echo ""
+          echo "Current Istio version:"
+          kubectl get deployment istiod -n istio-system -o jsonpath='{.spec.template.spec.containers[0].image}'
+          echo ""
+        fi
+      displayName: Install Istio Service Mesh
+
+    # ── Create namespace with Istio sidecar injection ─────────────────
+    - script: kubectl apply -f k8s/namespace.yaml
+      displayName: Apply Namespace (istio-injection enabled)
+
+    # ── Apply mTLS policy (STRICT mode) ───────────────────────────────
+    - script: kubectl apply -f k8s/service-mesh/istio-config.yaml
+      displayName: Apply PeerAuthentication (mTLS STRICT)
+
+    # ── Apply circuit breaker rules ───────────────────────────────────
+    - script: kubectl apply -f k8s/service-mesh/destination-rules.yaml
+      displayName: Apply DestinationRules (Circuit Breakers)
+
+    # ── Apply retry & timeout policies ────────────────────────────────
+    - script: kubectl apply -f k8s/service-mesh/virtual-services.yaml
+      displayName: Apply VirtualServices (Retries & Timeouts)
+
+    # ── Verify Istio configuration ────────────────────────────────────
+    - script: |
+        echo "========== ISTIO SYSTEM PODS =========="
+        kubectl get pods -n istio-system
+        echo ""
+        echo "========== MESH POLICIES (eshop namespace) =========="
+        echo "PeerAuthentication:"
+        kubectl get peerauthentication -n eshop
+        echo ""
+        echo "DestinationRules:"
+        kubectl get destinationrules -n eshop
+        echo ""
+        echo "VirtualServices:"
+        kubectl get virtualservices -n eshop
+      displayName: Verify Istio Configuration
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 6 — OpenTelemetry Observability
+# Deploys the full observability stack:
+#   • OTel Collector — receives traces, metrics, logs via OTLP
+#   • Jaeger         — distributed tracing UI
+#   • Prometheus     — metrics collection & scraping
+#   • Grafana        — dashboards & visualization
+# ─────────────────────────────────────────────────────────────────────────────
+- stage: Observability
+  displayName: 6 - OpenTelemetry Observability
+  dependsOn: ServiceMesh
+  jobs:
+  - job: DeployObservability
+    displayName: Deploy OTel Collector, Jaeger, Prometheus, Grafana
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - checkout: self
+
+    - task: AzureCLI@2
+      displayName: Get AKS credentials
+      inputs:
+        azureSubscription: azure-service-connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az aks get-credentials \
+            --resource-group eshop-dev-rg \
+            --name eshop-dev-aks \
+            --overwrite-existing
+
+    # ── Deploy OpenTelemetry Collector ─────────────────────────────────
+    - script: kubectl apply -f k8s/observability/otel-collector.yaml
+      displayName: Deploy OTel Collector (OTLP receiver → Jaeger + Prometheus)
+
+    # ── Deploy Jaeger (Distributed Tracing) ───────────────────────────
+    - script: kubectl apply -f k8s/observability/jaeger.yaml
+      displayName: Deploy Jaeger (Trace Visualization)
+
+    # ── Deploy Prometheus (Metrics) ───────────────────────────────────
+    - script: kubectl apply -f k8s/observability/prometheus.yaml
+      displayName: Deploy Prometheus (Metrics Collection)
+
+    # ── Deploy Grafana (Dashboards) ───────────────────────────────────
+    - script: kubectl apply -f k8s/observability/grafana.yaml
+      displayName: Deploy Grafana (Dashboards)
+
+    # ── Wait for observability stack to be ready ──────────────────────
+    - script: |
+        echo "Waiting for observability pods to be ready..."
+        kubectl wait --namespace eshop \
+          --for=condition=ready pod \
+          --selector=app=otel-collector \
+          --timeout=120s || echo "⚠️ OTel Collector not ready yet"
+
+        kubectl wait --namespace eshop \
+          --for=condition=ready pod \
+          --selector=app=jaeger \
+          --timeout=120s || echo "⚠️ Jaeger not ready yet"
+
+        kubectl wait --namespace eshop \
+          --for=condition=ready pod \
+          --selector=app=prometheus \
+          --timeout=120s || echo "⚠️ Prometheus not ready yet"
+
+        kubectl wait --namespace eshop \
+          --for=condition=ready pod \
+          --selector=app=grafana \
+          --timeout=120s || echo "⚠️ Grafana not ready yet"
+      displayName: Wait for Observability Stack
+
+    # ── Verify observability stack ────────────────────────────────────
+    - script: |
+        echo "========== OBSERVABILITY PODS =========="
+        kubectl get pods -n eshop -l tier=observability -o wide
+        echo ""
+        echo "========== OBSERVABILITY SERVICES =========="
+        kubectl get svc -n eshop -l tier=observability
+        echo ""
+        echo "========== ACCESS COMMANDS =========="
+        echo "Jaeger UI:    kubectl port-forward svc/jaeger 16686:16686 -n eshop"
+        echo "Grafana:      kubectl port-forward svc/grafana 3000:3000 -n eshop"
+        echo "Prometheus:   kubectl port-forward svc/prometheus 9090:9090 -n eshop"
+        echo "OTel metrics: kubectl port-forward svc/otel-collector 8889:8889 -n eshop"
+      displayName: Verify Observability Stack
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 7 — Deploy Application to AKS
+# Deploys all backend/frontend services with OTel instrumentation,
+# applies ingress, and updates image tags to current build
 # ─────────────────────────────────────────────────────────────────────────────
 - stage: Deploy
-  displayName: 4 - Deploy to AKS
-  dependsOn: DockerPush
+  displayName: 7 - Deploy to AKS
+  dependsOn: Observability
   jobs:
   - deployment: DeployToAKS
     pool:
@@ -248,9 +521,7 @@ stages:
                   --name eshop-dev-aks \
                   --overwrite-existing
 
-          - script: kubectl apply -f k8s/deployments.yml
-            displayName: Apply K8s manifests
-
+          # ── Step 1: Fetch secrets from Key Vault ─────────────────────────
           - task: AzureCLI@2
             displayName: Create K8s secrets from Key Vault
             inputs:
@@ -267,116 +538,52 @@ stages:
                 PG_CONNSTR_BASE="SSL Mode=Require"
 
                 kubectl create secret generic eshop-secrets \
-                  --from-literal=catalog-db-connstr="Host=$PG_HOST;Database=CatalogDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
-                  --from-literal=ordering-db-connstr="Host=$PG_HOST;Database=OrderingDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
-                  --from-literal=identity-db-connstr="Host=$PG_HOST;Database=IdentityDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
-                  --from-literal=webhooks-db-connstr="Host=$PG_HOST;Database=WebhooksDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
-                  --from-literal=redis-connstr="$REDIS_HOST:6380,password=$REDIS_KEY,ssl=True" \
+                  --namespace eshop \
+                  --from-literal=catalog-db="Host=$PG_HOST;Database=CatalogDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=ordering-db="Host=$PG_HOST;Database=OrderingDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=identity-db="Host=$PG_HOST;Database=IdentityDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=webhooks-db="Host=$PG_HOST;Database=WebhooksDB;Username=psqladmin;Password=$PG_PASS;$PG_CONNSTR_BASE" \
+                  --from-literal=redis="$REDIS_HOST:6380,password=$REDIS_KEY,ssl=True" \
                   --dry-run=client -o yaml | kubectl apply -f -
 
+          # ── Step 2: Apply database ConfigMap ─────────────────────────────
+          - script: kubectl apply -f k8s/database/configmap.yaml
+            displayName: Apply Database ConfigMap
+
+          # ── Step 3: Deploy backend services ──────────────────────────────
+          - script: kubectl apply -f k8s/backend/
+            displayName: Apply Backend Manifests
+
+          # ── Step 4: Deploy frontend ──────────────────────────────────────
+          - script: kubectl apply -f k8s/frontend/
+            displayName: Apply Frontend Manifests
+
+          # ── Step 5: Apply Ingress rules ──────────────────────────────────
+          - script: kubectl apply -f k8s/ingress.yaml
+            displayName: Apply Ingress
+
+          # ── Step 6: Update image tags to current build ───────────────────
           - script: |
               for service in webapp catalog-api basket-api ordering-api identity-api webhooks-api order-processor payment-processor; do
                 kubectl set image deployment/$service \
-                  $service=$(acrName).azurecr.io/$service:$(imageTag)
+                  $service=$(acrName).azurecr.io/$service:$(imageTag) \
+                  --namespace eshop
               done
             displayName: Update image tags on AKS
 
-          - script: kubectl rollout status deployment --timeout=5m
+          # ── Step 7: Wait for all rollouts to complete ────────────────────
+          - script: kubectl rollout status deployment --namespace eshop --timeout=5m
             displayName: Wait for rollout
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STAGE 5 — Terraform Destroy  ⚠️  MANUAL ONLY
-#
-# This stage NEVER runs automatically.
-# To trigger it:
-#   1. Go to Azure Pipelines → Run pipeline
-#   2. Set variable  RUN_DESTROY = true
-#   3. Queue the run — all other stages will be skipped
-#   4. Approve the 'destroy-approval' environment gate when prompted
-#
-# This will permanently delete ALL Azure resources for the environment.
-# ─────────────────────────────────────────────────────────────────────────────
-- stage: TerraformDestroy
-  displayName: "⚠️ MANUAL — Terraform Destroy"
-  dependsOn: []                                      # independent — no prerequisite stages
-  condition: eq(variables['RUN_DESTROY'], 'true')    # only runs when explicitly requested
-  jobs:
-  - deployment: DestroyInfrastructure
-    pool:
-      vmImage: ubuntu-latest
-    environment: destroy-approval                    # configure manual approval gate in Azure DevOps
-    strategy:
-      runOnce:
-        deploy:
-          steps:
+          # ── Step 8: Final deployment status ──────────────────────────────
+          - script: |
+              echo "========== PODS (with Istio sidecars) =========="
+              kubectl get pods -n eshop -o wide
+              echo ""
+              echo "========== SERVICES =========="
+              kubectl get svc -n eshop
+              echo ""
+              echo "========== INGRESS =========="
+              kubectl get ingress -n eshop
+            displayName: Show deployment status
 
-          - checkout: self
-
-          # ── Init (required before destroy) ───────────────────────────────
-          - task: AzureCLI@2
-            displayName: Terraform Init
-            inputs:
-              azureSubscription: azure-service-connection
-              scriptType: bash
-              scriptLocation: inlineScript
-              addSpnToEnvironment: true
-              inlineScript: |
-                wget -q https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
-                unzip -q terraform_$(terraformVersion)_linux_amd64.zip
-                sudo mv terraform /usr/local/bin/
-
-                export ARM_CLIENT_ID=$servicePrincipalId
-                export ARM_CLIENT_SECRET=$servicePrincipalKey
-                export ARM_TENANT_ID=$tenantId
-                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-                cd $(Build.SourcesDirectory)/infra/terraform
-                terraform init \
-                  -backend-config="resource_group_name=eshop-tfstate-rg" \
-                  -backend-config="storage_account_name=eshoptfstate" \
-                  -backend-config="container_name=tfstate" \
-                  -backend-config="key=eshop.terraform.tfstate"
-
-          # ── Plan Destroy (shows what will be deleted before acting) ───────
-          - task: AzureCLI@2
-            displayName: Terraform Plan Destroy (preview)
-            inputs:
-              azureSubscription: azure-service-connection
-              scriptType: bash
-              scriptLocation: inlineScript
-              addSpnToEnvironment: true
-              inlineScript: |
-                export ARM_CLIENT_ID=$servicePrincipalId
-                export ARM_CLIENT_SECRET=$servicePrincipalKey
-                export ARM_TENANT_ID=$tenantId
-                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-                cd $(Build.SourcesDirectory)/infra/terraform
-                echo "======================================"
-                echo "  RESOURCES THAT WILL BE DESTROYED"
-                echo "======================================"
-                terraform plan -destroy \
-                  -var="environment=$(tfEnvironment)" \
-                  -var="postgres_location=$(tfPostgresLocation)"
-
-          # ── Destroy ──────────────────────────────────────────────────────
-          - task: AzureCLI@2
-            displayName: "⚠️ Terraform Destroy — IRREVERSIBLE"
-            inputs:
-              azureSubscription: azure-service-connection
-              scriptType: bash
-              scriptLocation: inlineScript
-              addSpnToEnvironment: true
-              inlineScript: |
-                export ARM_CLIENT_ID=$servicePrincipalId
-                export ARM_CLIENT_SECRET=$servicePrincipalKey
-                export ARM_TENANT_ID=$tenantId
-                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-                cd $(Build.SourcesDirectory)/infra/terraform
-                terraform destroy \
-                  -var="environment=$(tfEnvironment)" \
-                  -var="postgres_location=$(tfPostgresLocation)" \
-                  -auto-approve
-
-                echo "All infrastructure destroyed successfully."

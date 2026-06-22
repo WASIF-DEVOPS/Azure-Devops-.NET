@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-processor
+  namespace: eshop
+  labels:
+    app: payment-processor
+    tier: backend
+    role: worker
+    app.kubernetes.io/part-of: eshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-processor
+  template:
+    metadata:
+      labels:
+        app: payment-processor
+        tier: backend
+        role: worker
+    spec:
+      containers:
+        - name: payment-processor
+          image: eshopdevacr.azurecr.io/payment-processor:latest
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            # ── OpenTelemetry ──────────────────────────────────────
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.eshop.svc.cluster.local:4317
+            - name: OTEL_SERVICE_NAME
+              value: payment-processor
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: deployment.environment=dev,service.namespace=eshop
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
